@@ -212,85 +212,125 @@ _mint(msg.sender, initialSupply);
 }
 }
 ```
+**3. Deployment and interaction script (`scripts/deployAndInteract.js`)**
 
-/**
-* @dev Withdraw the interest that has been generated.
-*/
-function claimInterest() public {
-uint256 interestToClaim = calculateAvailableInterest(msg.sender);
-require(interestToClaim > 0, "No interest to claim");
+```javascript
+const { ethers } = require("hardhat");
 
-// Update the record of the interest that has been withdrawn
-deposits[msg.sender].claimedInterest = deposits[msg.sender].claimedInterest.add(interestToClaim);
+async function main() {
+const [deployer, user1, user2] = await ethers.getSigners();
 
-// Transfer interest tokens to users
-require(depositToken.transfer(msg.sender, interestToClaim), "Interest transfer failed");
+console.log("Deploying contract...");
 
-emit InterestClaimed(msg.sender, interestToClaim);
+// Deploy Mock ERC-20 token
+const MockToken = await ethers.getContractFactory("MockToken");
+// Initial supply of 1,000,000 tokens, assuming the token has 18 decimal places
+const initialSupply = ethers.parseUnits("1000000", 18);
+const mockToken = await MockToken.deploy(initialSupply);
+await mockToken.waitForDeployment();
+const mockTokenAddress = await mockToken.getAddress();
+console.log(`MockToken Deploy to: ${mockTokenAddress}`);
+
+// Give user1 and user2 some tokens for testing
+const transferAmount = ethers.parseUnits("1000", 18);
+await mockToken.transfer(user1.address, transferAmount);
+await mockToken.transfer(user2.address, transferAmount);
+console.log(`${ethers.formatUnits(transferAmount, 18)} mUSDT transferred to user1 and user2`);
+
+// Deploy ShortTermDepositProduct contract
+// Set initial daily rate to 10 BPS (0.1%)
+const initialDailyRateBPS = 10;
+const ShortTermDepositProduct = await ethers.getContractFactory("ShortTermDepositProduct");
+const depositProduct = await ShortTermDepositProduct.deploy(mockTokenAddress, initialDailyRateBPS);
+await depositProduct.waitForDeployment();
+const depositProductAddress = await depositProduct.getAddress();
+console.log(`ShortTermDepositProduct deployed to: ${depositProductAddress}`);
+console.log(`Initial Daily Rate (BPS): ${initialDailyRateBPS}`);
+
+console.log("\n--- User 1 (user1) made a deposit ---");
+const depositAmount = ethers.parseUnits("100", 18); // Deposit 100 mUSDT
+const depositDurationDays = 7; // Deposit 7 days
+
+// user1 authorizes ShortTermDepositProduct contract to spend its mUSDT
+await mockToken.connect(user1).approve(depositProductAddress, depositAmount);
+console.log(`User1 authorizes ${depositProductAddress} to spend ${ethers.formatUnits(depositAmount, 18)} mUSDT`);
+
+// user1 calls the deposit function
+await depositProduct.connect(user1).deposit(depositAmount, depositDurationDays);
+console.log(`User1 deposited ${ethers.formatUnits(depositAmount, 18)} mUSDT, term ${depositDurationDays} days`);
+
+// Check user 1's deposit information
+let user1Deposit = await depositProduct.deposits(user1.address);
+console.log(`User1 deposit principal: ${ethers.formatUnits(user1Deposit.amount, 18)} mUSDT`);
+console.log(`User1 deposit term: ${user1Deposit.durationDays} days`);
+console.log(`User1 deposit time: ${new Date(Number(user1Deposit.startTime) * 1000)}`);
+
+console.log("\n--- Simulate the passage of time ---");
+// Simulate time to advance 3 days (3 * 24 * 60 * 60 seconds)
+await ethers.provider.send("evm_increaseTime", [3 * 24 * 60 * 60]);
+await ethers.provider.send("evm_mine", []); // Mine a new block to make time effective
+console.log("Time has advanced 3 days.");
+
+console.log("\n--- User 1 (user1) tried to withdraw interest ---");
+let availableInterest = await depositProduct.calculateAvailableInterest(user1.address);
+console.log(`User1 can withdraw interest: ${ethers.formatUnits(availableInterest, 18)} mUSDT`);
+
+if (availableInterest > 0) {
+await depositProduct.connect(user1).claimInterest();
+console.log(`User1 successfully withdrew interest ${ethers.formatUnits(availableInterest, 18)} mUSDT`);
+} else {
+console.log("User1 currently has no interest to withdraw.");
 }
 
-/**
-* @dev Withdraw the principal. Can only be called when the deposit expires.
-*/
-function withdrawPrincipal() public {
-Deposit storage userDeposit = deposits[msg.sender];
-require(userDeposit.amount > 0, "No active deposit to withdraw");
+// Check user 1's deposit information again to see if claimedInterest is updated
+user1Deposit = await depositProduct.deposits(user1.address);
+console.log(`User1 has withdrawn interest: ${ethers.formatUnits(user1Deposit.claimedInterest, 18)} mUSDT`);
 
-// Check if it is due
-uint256 maturityTime = userDeposit.startTime.add(userDeposit.durationDays.mul(1 days));
-require(block.timestamp >= maturityTime, "Deposit has not matured yet");
+console.log("\n--- Simulation time advances to deposit expiration ---");
+// Simulation time advances to ensure that it exceeds 7 days (for example, advance another 5 days, a total of 3 + 5 = 8 days)
+await ethers.provider.send("evm_increaseTime", [5 * 24 * 60 * 60]);
+await ethers.provider.send("evm_mine", []);
+console.log("Time has advanced to after the deposit expires.");
 
-uint256 principalToReturn = userDeposit.amount;
-
-// Clear deposit records
-delete deposits[msg.sender];
-
-// Transfer principal tokens to users
-require(depositToken.transfer(msg.sender, principalToReturn), "Principal transfer failed");
-
-emit PrincipalWithdrawn(msg.sender, principalToReturn);
+console.log("\n--- User 1 (user1) withdraws principal ---");
+// Before withdrawing principal, check again if there is any unwithdrawn interest
+availableInterest = await depositProduct.calculateAvailableInterest(user1.address);
+if (availableInterest > 0) {
+console.log(`User1 still has available interest before withdrawing principal: ${ethers.formatUnits(availableInterest, 18)} mUSDT`);
+await depositProduct.connect(user1).claimInterest();
+console.log(`User1 successfully withdrew the remaining interest ${ethers.formatUnits(availableInterest, 18)} mUSDT`);
+} else {
+console.log("User1 has no remaining interest before withdrawing principal.");
 }
 
-/**
-* @dev Emergency withdrawal function, only for the owner to use in an emergency.
-* In a production environment, this should be a more complex and limited function.
-*/
-function emergencyWithdraw(address _tokenAddress, uint256 _amount) public onlyOwner {
-IERC20 token = IERC20(_tokenAddress);
-token.transfer(owner(), _amount);
+const user1BalanceBeforeWithdraw = await mockToken.balanceOf(user1.address);
+console.log(`User1 Balance before withdrawal: ${ethers.formatUnits(user1BalanceBeforeWithdraw, 18)} mUSDT`);
+
+await depositProduct.connect(user1).withdrawPrincipal();
+console.log(`User1 successfully withdrew the principal ${ethers.formatUnits(depositAmount, 18)} mUSDT`);
+
+const user1BalanceAfterWithdraw = await mockToken.balanceOf(user1.address);
+console.log(`User1 Balance after withdrawal: ${ethers.formatUnits(user1BalanceAfterWithdraw, 18)} mUSDT`);
+
+// Verify that the deposit record has been cleared
+user1Deposit = await depositProduct.deposits(user1.address);
+console.log(`User1 Deposit record (principal): ${ethers.formatUnits(user1Deposit.amount, 18)} mUSDT (should be 0)`);
+
+console.log("\n--- Contract owner modifies daily interest rate ---");
+const newDailyRateBPS = 20; // Change to 0.2%
+await depositProduct.connect(deployer).setDailyInterestRate(newDailyRateBPS);
+console.log(`Owner updates daily interest rate to ${newDailyRateBPS} BPS`);
+console.log(`Current daily interest rate (BPS): ${await depositProduct.dailyInterestRateBasisPoints()}`);
+
+console.log("\n--- End of example ---");
 }
-}
-```
 
------
-
-## Contract call example (using Hardhat/Ethers.js)
-
-Here we will provide an example of deployment and interaction using Hardhat and Ethers.js. You need to install Hardhat and set up the project first.
-
-**1. Preparation**
-
-First, make sure your project has the following dependencies installed:
-
-```bash
-npm install --save-dev hardhat @nomicfoundation/hardhat-ethers @openzeppelin/contracts
-```
-
-**2. Deploy ERC-20 token contract (MockToken.sol)**
-
-For testing, we need an ERC-20 token. Create a file `contracts/MockToken.sol`:
-
-```solidity
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
-
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-
-contract MockToken is ERC20 { 
-constructor(uint256 initialSupply) ERC20("Mock USDT", "mUSDT") { 
-_mint(msg.sender, initialSupply); 
-}
-}
+main()
+.then(() => process.exit(0))
+.catch((error) => {
+console.error(error);
+process.exit(1);
+});
 ```
 
 **4. Run the script**
