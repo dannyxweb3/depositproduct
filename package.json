@@ -1,0 +1,24 @@
+{
+  "name": "depositproduct",
+  "version": "1.0.0",
+  "description": "本教程将使用 **Solidity** 语言和 **ERC-20 代币**作为存款和利息支付的媒介（这在DeFi中非常常见，因为它可以方便地处理稳定币如USDT、USDC等）。",
+  "main": "app-for-mycontract.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dannyxweb3/depositproduct.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dannyxweb3/depositproduct/issues"
+  },
+  "homepage": "https://github.com/dannyxweb3/depositproduct#readme",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^6.1.0",
+    "hardhat": "^2.26.1"
+  }
+}
